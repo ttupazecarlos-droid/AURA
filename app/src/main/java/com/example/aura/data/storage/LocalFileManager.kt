@@ -2,6 +2,7 @@ package com.example.aura.data.storage
 
 import android.content.ContentUris
 import android.content.Context
+import android.content.Intent
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
@@ -13,6 +14,15 @@ import com.example.aura.model.Song
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+
+// Sin permiso persistente, la pista importada deja de sonar tras reiniciar la app.
+fun Context.takePersistableReadPermission(uri: Uri) {
+    try {
+        contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    } catch (_: SecurityException) {
+        // Algunos proveedores no conceden permisos persistentes; la pista funciona solo en esta sesión.
+    }
+}
 
 class LocalFileManager(private val context: Context) {
 

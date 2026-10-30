@@ -60,10 +60,8 @@ class MusicPlaybackService : Service() {
         }
 
         fun stopService(context: Context) {
-            val intent = Intent(context, MusicPlaybackService::class.java).apply {
-                action = ACTION_STOP
-            }
-            context.startService(intent)
+            // Detiene el servicio; no lo arranca si no estaba corriendo (ACTION_STOP lo resucitaba).
+            context.stopService(Intent(context, MusicPlaybackService::class.java))
         }
     }
 

@@ -18,10 +18,11 @@ interface SongDao {
     @Query("SELECT * FROM songs WHERE id = :id LIMIT 1")
     suspend fun getSongById(id: String): SongEntity?
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    // IGNORE: re-escanear o reimportar no debe borrar isFavorite ni dateAdded de una pista existente.
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertSongs(songs: List<SongEntity>)
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertSong(song: SongEntity)
 
     @Query("UPDATE songs SET isFavorite = :isFavorite WHERE id = :songId")

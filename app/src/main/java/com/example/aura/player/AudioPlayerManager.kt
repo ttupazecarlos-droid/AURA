@@ -21,9 +21,28 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlin.random.Random
 
 enum class RepeatMode {
     OFF, ALL, ONE
+}
+
+// Devuelve null cuando ya no quedan pistas y repeat está en OFF: fin de cola.
+internal fun pickShuffleIndex(
+    queueSize: Int,
+    currentIndex: Int,
+    playedIndices: Set<Int>,
+    repeatAll: Boolean,
+    random: Random = Random.Default
+): Int? {
+    if (queueSize <= 0) return null
+    var candidates = (0 until queueSize).filter { it != currentIndex && it !in playedIndices }
+    if (candidates.isEmpty()) {
+        if (!repeatAll) return null
+        candidates = (0 until queueSize).filter { it != currentIndex }
+        if (candidates.isEmpty()) return currentIndex
+    }
+    return candidates[random.nextInt(candidates.size)]
 }
 
 class AudioPlayerManager private constructor(private val context: Context) {
@@ -63,6 +82,9 @@ class AudioPlayerManager private constructor(private val context: Context) {
     private var sleepTimerJob: Job? = null
     private val _sleepTimerRemainingMs = MutableStateFlow(0L)
     val sleepTimerRemainingMs: StateFlow<Long> = _sleepTimerRemainingMs.asStateFlow()
+
+    // Índices ya reproducidos en el ciclo actual de shuffle, para no repetir hasta agotar la cola.
+    private val shuffledPlayedIndices = mutableSetOf<Int>()
 
     private val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
         when (focusChange) {
@@ -107,10 +129,7 @@ class AudioPlayerManager private constructor(private val context: Context) {
                 _sleepTimerRemainingMs.value = remaining.coerceAtLeast(0L)
             }
             if (isActive && remaining <= 0) {
-                stop()
-                try {
-                    com.example.aura.service.MusicPlaybackService.stopService(context)
-                } catch (_: Exception) {}
+                stopPlaybackAndService()
             }
         }
     }
@@ -173,6 +192,7 @@ class AudioPlayerManager private constructor(private val context: Context) {
         }
 
         playTrack(song)
+        resetShuffleHistory()
     }
 
     private fun playTrack(song: Song) {
@@ -197,25 +217,37 @@ class AudioPlayerManager private constructor(private val context: Context) {
     }
 
     fun togglePlayPause() {
-        val mp = mediaPlayer ?: return
         if (_currentSong.value == null && _queue.value.isNotEmpty()) {
             playTrack(_queue.value.first())
             return
         }
+        val mp = mediaPlayer ?: run {
+            initMediaPlayer()
+            _currentSong.value?.let { playTrack(it) }
+            return
+        }
 
-        if (mp.isPlaying) {
-            pausePlayback()
-            abandonAudioFocus()
-        } else {
-            if (requestAudioFocus()) {
-                mp.start()
-                _isPlaying.value = true
-                startProgressTracker()
-                registerNoisyReceiver()
-                try {
-                    com.example.aura.service.MusicPlaybackService.startService(context)
-                } catch (_: Exception) {}
+        try {
+            if (mp.isPlaying) {
+                pausePlayback()
+                abandonAudioFocus()
+            } else {
+                if (requestAudioFocus()) {
+                    mp.start()
+                    _isPlaying.value = true
+                    startProgressTracker()
+                    registerNoisyReceiver()
+                    try {
+                        com.example.aura.service.MusicPlaybackService.startService(context)
+                    } catch (_: Exception) {}
+                }
             }
+        } catch (e: IllegalStateException) {
+            // Tras un error de decodificación el player queda en estado inválido y `isPlaying`/`start` lanzan.
+            Log.w("AudioPlayerManager", "Invalid player state, recreating", e)
+            initMediaPlayer()
+            _isPlaying.value = false
+            _currentSong.value?.let { playTrack(it) }
         }
     }
 
@@ -237,6 +269,16 @@ class AudioPlayerManager private constructor(private val context: Context) {
         abandonAudioFocus()
     }
 
+    // Fin de cola: además de pausar, quita la notificación en primer plano.
+    private fun stopPlaybackAndService() {
+        stop()
+        try {
+            com.example.aura.service.MusicPlaybackService.stopService(context)
+        } catch (e: Exception) {
+            Log.w("AudioPlayerManager", "Failed to stop playback service", e)
+        }
+    }
+
     fun seekTo(positionMs: Long) {
         val mp = mediaPlayer ?: return
         try {
@@ -252,10 +294,16 @@ class AudioPlayerManager private constructor(private val context: Context) {
         if (q.isEmpty()) return
 
         if (_isShuffle.value && q.size > 1) {
-            var nextIdx = (q.indices).random()
-            if (nextIdx == _currentIndex.value) {
-                nextIdx = (nextIdx + 1) % q.size
+            val nextIdx = pickShuffleIndex(
+                queueSize = q.size,
+                currentIndex = _currentIndex.value,
+                playedIndices = shuffledPlayedIndices,
+                repeatAll = _repeatMode.value != RepeatMode.OFF
+            ) ?: run {
+                stopPlaybackAndService()
+                return
             }
+            shuffledPlayedIndices.add(nextIdx)
             _currentIndex.value = nextIdx
             playTrack(q[nextIdx])
             return
@@ -269,7 +317,7 @@ class AudioPlayerManager private constructor(private val context: Context) {
             _currentIndex.value = 0
             playTrack(q[0])
         } else {
-            stop()
+            stopPlaybackAndService()
         }
     }
 
@@ -307,6 +355,12 @@ class AudioPlayerManager private constructor(private val context: Context) {
 
     fun toggleShuffle() {
         _isShuffle.value = !_isShuffle.value
+        resetShuffleHistory()
+    }
+
+    private fun resetShuffleHistory() {
+        shuffledPlayedIndices.clear()
+        shuffledPlayedIndices.add(_currentIndex.value)
     }
 
     fun toggleRepeat() {
@@ -336,9 +390,10 @@ class AudioPlayerManager private constructor(private val context: Context) {
                 _currentIndex.value = nextIdx
                 playTrack(curList[nextIdx])
             } else if (curList.isEmpty()) {
-                stop()
                 _currentSong.value = null
+                stopPlaybackAndService()
             }
+            resetShuffleHistory()
         }
     }
 
@@ -353,6 +408,7 @@ class AudioPlayerManager private constructor(private val context: Context) {
             if (newCurrentIndex >= 0) {
                 _currentIndex.value = newCurrentIndex
             }
+            resetShuffleHistory()
         }
     }
 

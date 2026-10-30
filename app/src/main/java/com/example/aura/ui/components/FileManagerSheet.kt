@@ -56,6 +56,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.heading
@@ -66,6 +67,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.aura.data.storage.FileItem
+import com.example.aura.data.storage.takePersistableReadPermission
 import com.example.ui.theme.AuraAccentTeal
 import com.example.ui.theme.AuraCardBorder
 import com.example.ui.theme.AuraDarkBackground
@@ -93,12 +95,16 @@ fun FileManagerSheet(
     onPlayFileItem: (FileItem) -> Unit
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
+    val context = LocalContext.current
 
     // Launcher for selecting audio files
     val filePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris ->
-        uris.forEach { onImportUri(it) }
+        uris.forEach { uri ->
+            context.takePersistableReadPermission(uri)
+            onImportUri(uri)
+        }
     }
 
     // Launcher for selecting an entire music folder
@@ -106,6 +112,7 @@ fun FileManagerSheet(
         contract = ActivityResultContracts.OpenDocumentTree()
     ) { treeUri ->
         if (treeUri != null) {
+            context.takePersistableReadPermission(treeUri)
             onImportFolder(treeUri)
         }
     }

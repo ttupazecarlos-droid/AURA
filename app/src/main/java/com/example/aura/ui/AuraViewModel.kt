@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.UUID
 
 enum class AuraScreen {
@@ -184,6 +185,10 @@ class AuraViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }.collect { list ->
                 _playlists.value = list
+                // Mantiene el detalle abierto al día al añadir o quitar canciones.
+                _selectedPlaylist.value = _selectedPlaylist.value?.let { selected ->
+                    list.find { it.id == selected.id }
+                }
             }
         }
     }
@@ -277,7 +282,7 @@ class AuraViewModel(application: Application) : AndroidViewModel(application) {
             playlistDao.deletePlaylist(playlistId)
             playlistDao.clearPlaylistSongs(playlistId)
             if (_selectedPlaylist.value?.id == playlistId) {
-                navigateBack()
+                withContext(Dispatchers.Main) { navigateBack() }
             }
             _statusMessage.value = "Lista eliminada"
         }
@@ -334,7 +339,10 @@ class AuraViewModel(application: Application) : AndroidViewModel(application) {
                     _statusMessage.value = "Pista importada: ${song.title}"
                     // No cortar lo que ya suena al abrir un archivo desde el gestor.
                     if (playerManager.currentSong.value == null) {
-                        playerManager.playSong(song, _songs.value + song)
+                        // MediaPlayer debe crearse/prepararse en el hilo principal.
+                        withContext(Dispatchers.Main) {
+                            playerManager.playSong(song, _songs.value + song)
+                        }
                     }
                 } else {
                     _statusMessage.value = "No se pudo leer el archivo de audio"

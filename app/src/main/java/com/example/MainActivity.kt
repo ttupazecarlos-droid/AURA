@@ -17,6 +17,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.aura.data.storage.takePersistableReadPermission
 import com.example.aura.ui.AuraApp
 import com.example.aura.ui.AuraViewModel
 import com.example.ui.theme.AuraDarkBackground
@@ -107,6 +108,7 @@ class MainActivity : ComponentActivity() {
         val data: Uri? = intent.data
 
         if ((Intent.ACTION_VIEW == action || Intent.ACTION_SEND == action) && data != null) {
+            takePersistableReadPermission(data)
             viewModel.importSongFromUri(data)
         }
     }
