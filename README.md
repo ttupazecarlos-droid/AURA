@@ -4,6 +4,8 @@ AURA es un reproductor de música de alta fidelidad (Hi-Fi) y gestión de archiv
 
 ## Características Principales
 
+- **Bloqueo del sistema:** al abrir AURA se solicita la huella o el PIN, patrón o contraseña del teléfono. Android 11+ usa `BiometricPrompt` con `BIOMETRIC_STRONG or DEVICE_CREDENTIAL`, sin botón negativo personalizado: Android ofrece la alternativa de credenciales y la abre directamente si no hay biometría disponible. Android 7-10 usa biometría fuerte con una opción para abrir la confirmación nativa de credenciales, o va directamente a esta si no hay huellas disponibles, porque no admite esa combinación de banderas. Sin ningún método de seguridad activo, AURA permanece bloqueada y ofrece abrir `Settings.ACTION_SECURITY_SETTINGS`. No se crean pantallas de PIN propias ni se almacenan huellas o credenciales.
+- **Margen de retorno:** tras autenticarse, las salidas de menos de 2 minutos no vuelven a pedir autenticación; al regresar después de 2 minutos o más, sí. El intervalo se mide con el reloj monotónico de Android, incluso con el teléfono suspendido. Si Android destruye el proceso, se requiere autenticar de nuevo. Cancelar o fallar nunca concede acceso; se puede reintentar desde la pantalla bloqueada. El sistema controla los intentos y su bloqueo temporal.
 - **Audio de Alta Fidelidad (Hi-Fi):** Soporte para FLAC, WAV, ALAC y pistas sin pérdida de hasta 24-bit/192kHz.
 - **Gestión de Archivos Locales:** Selección de carpetas mediante SAF, escaneo recursivo de archivos nuevos y rutas persistentes entre actualizaciones.
 - **Letras Sincronizadas:** Visualización de letras con formato LRC.
@@ -38,3 +40,5 @@ MainActivity
 - `service/MusicPlaybackService.kt`: servicio en primer plano y notificación de reproducción.
 - `ui/theme/`: colores, tipografía y tema Material 3.
 - `model/Models.kt`: modelos de dominio compartidos por UI, datos y reproductor.
+
+El bloqueo protege el acceso a la interfaz, no cifra los archivos de música. La reproducción y los controles multimedia de Android siguen funcionando en segundo plano. Las capturas de pantalla y la vista previa en recientes se deshabilitan para proteger la biblioteca.
