@@ -12,6 +12,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
+import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -23,6 +24,9 @@ interface SongDao {
     // Todas las canciones, las más recientes primero.
     @Query("SELECT * FROM songs ORDER BY dateAdded DESC")
     fun getAllSongs(): Flow<List<SongEntity>>
+
+    @Query("SELECT * FROM songs ORDER BY dateAdded DESC")
+    suspend fun getAllSongsOnce(): List<SongEntity>
 
     // Solo las canciones marcadas como favoritas, orden alfabético.
     @Query("SELECT * FROM songs WHERE isFavorite = 1 ORDER BY title ASC")
@@ -40,9 +44,16 @@ interface SongDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertSong(song: SongEntity)
 
+    // Upsert actualiza sin el DELETE implícito de REPLACE y su cascada.
+    @Upsert
+    suspend fun updateSong(song: SongEntity)
+
     // Activa/desactiva el favorito de una canción.
     @Query("UPDATE songs SET isFavorite = :isFavorite WHERE id = :songId")
     suspend fun setFavorite(songId: String, isFavorite: Boolean)
+
+    @Query("UPDATE songs SET isFavorite = NOT isFavorite WHERE id = :songId")
+    suspend fun toggleFavorite(songId: String)
 
     // Elimina una canción por id.
     @Query("DELETE FROM songs WHERE id = :songId")
@@ -53,8 +64,13 @@ interface SongDao {
     suspend fun getSongsByUriPrefix(prefix: String): List<SongEntity>
 
     // Borra varias canciones por id (archivos eliminados de una carpeta).
+    @Transaction
+    suspend fun deleteSongsByIds(songIds: List<String>) {
+        songIds.chunked(900).forEach { deleteSongsByIdsBatch(it) }
+    }
+
     @Query("DELETE FROM songs WHERE id IN (:songIds)")
-    suspend fun deleteSongsByIds(songIds: List<String>)
+    suspend fun deleteSongsByIdsBatch(songIds: List<String>)
 
     // Elimina las detecciones antiguas de MediaStore (escaneo global de todo el celular).
     @Query("DELETE FROM songs WHERE id GLOB 'media_*'")
@@ -87,10 +103,10 @@ interface PlaylistDao {
     fun getAllPlaylistSongs(): Flow<List<PlaylistSongEntity>>
 
     // Crea o actualiza una lista.
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Upsert
     suspend fun insertPlaylist(playlist: PlaylistEntity)
 
-    // Elimina la lista (sus relaciones se limpian aparte).
+    // Elimina la lista y sus relaciones por cascada.
     @Query("DELETE FROM playlists WHERE id = :playlistId")
     suspend fun deletePlaylist(playlistId: String)
 
@@ -99,8 +115,24 @@ interface PlaylistDao {
     fun getSongIdsForPlaylist(playlistId: String): Flow<List<String>>
 
     // Añade o actualiza una canción dentro de una lista.
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Upsert
     suspend fun insertPlaylistSong(item: PlaylistSongEntity)
+
+    @Query("SELECT MAX(sortOrder) FROM playlist_songs WHERE playlistId = :playlistId")
+    suspend fun getMaxSortOrder(playlistId: String): Int?
+
+    @Transaction
+    suspend fun addSongToPlaylist(playlistId: String, songId: String) {
+        val nextOrder = Math.addExact(getMaxSortOrder(playlistId) ?: -1, 1)
+        insertPlaylistSong(PlaylistSongEntity(playlistId, songId, nextOrder))
+    }
+
+    // Si ya existe la pista canónica en la lista, conserva su orden manual.
+    @Query("""
+        INSERT OR IGNORE INTO playlist_songs (playlistId, songId, sortOrder)
+        SELECT playlistId, :canonicalId, sortOrder FROM playlist_songs WHERE songId = :aliasId
+    """)
+    suspend fun copySongToPlaylists(aliasId: String, canonicalId: String)
 
     // Quita una canción concreta de una lista.
     @Query("DELETE FROM playlist_songs WHERE playlistId = :playlistId AND songId = :songId")
@@ -111,6 +143,11 @@ interface PlaylistDao {
     suspend fun clearPlaylistSongs(playlistId: String)
 
     // Limpia relaciones huérfanas cuando se eliminan canciones de una carpeta.
+    @Transaction
+    suspend fun deletePlaylistSongsForSongIds(songIds: List<String>) {
+        songIds.chunked(900).forEach { deletePlaylistSongsForSongIdsBatch(it) }
+    }
+
     @Query("DELETE FROM playlist_songs WHERE songId IN (:songIds)")
-    suspend fun deletePlaylistSongsForSongIds(songIds: List<String>)
+    suspend fun deletePlaylistSongsForSongIdsBatch(songIds: List<String>)
 }

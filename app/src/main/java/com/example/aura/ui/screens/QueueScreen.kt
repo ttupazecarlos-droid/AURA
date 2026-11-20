@@ -22,7 +22,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -60,6 +60,9 @@ import com.example.ui.theme.AuraScreenTitle
 import com.example.ui.theme.AuraTextMuted
 import com.example.ui.theme.AuraTextSecondary
 
+internal fun visibleQueueIndices(size: Int, currentIndex: Int, isShuffle: Boolean): List<Int> =
+    (0 until size).filter { if (isShuffle) it != currentIndex else it > currentIndex }
+
 @Composable
 /**
  * QueueScreen: sección "REPRODUCIENDO" + lista "SIGUIENTE" con acción de quitar de la cola.
@@ -68,12 +71,13 @@ fun QueueScreen(
     currentSong: Song?,
     queue: List<Song>,
     currentIndex: Int,
+    isShuffle: Boolean = false,
     onBack: () -> Unit,
     onSongClick: (Song) -> Unit,
     onRemoveFromQueue: (Int) -> Unit,
     onBackToLibrary: () -> Unit
 ) {
-    val upcomingSongs = queue.filterIndexed { index, _ -> index > currentIndex }
+    val upcomingIndices = visibleQueueIndices(queue.size, currentIndex, isShuffle)
 
     Column(
         modifier = Modifier
@@ -184,7 +188,8 @@ fun QueueScreen(
         Spacer(modifier = Modifier.height(28.dp))
 
         Text(
-            text = "SIGUIENTE (${upcomingSongs.size})",
+            text = if (isShuffle) "COLA EN MODO ALEATORIO (${upcomingIndices.size})"
+                else "SIGUIENTE (${upcomingIndices.size})",
             style = MaterialTheme.typography.titleSmall.copy(
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 1.sp
@@ -195,7 +200,7 @@ fun QueueScreen(
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        if (upcomingSongs.isEmpty()) {
+        if (upcomingIndices.isEmpty()) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -203,7 +208,8 @@ fun QueueScreen(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    text = "No hay canciones siguientes en la cola",
+                    text = if (isShuffle) "No hay otras canciones en la cola"
+                        else "No hay canciones siguientes en la cola",
                     color = AuraTextMuted,
                     style = MaterialTheme.typography.bodyMedium,
                     textAlign = TextAlign.Center
@@ -224,8 +230,8 @@ fun QueueScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 contentPadding = PaddingValues(bottom = 16.dp)
             ) {
-                itemsIndexed(upcomingSongs) { index, song ->
-                    val actualQueueIndex = currentIndex + 1 + index
+                items(upcomingIndices, key = { it }) { actualQueueIndex ->
+                    val song = queue[actualQueueIndex]
 
                     Surface(
                         modifier = Modifier

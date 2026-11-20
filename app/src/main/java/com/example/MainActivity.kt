@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
+import androidx.core.content.IntentCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -58,6 +59,18 @@ import com.example.ui.theme.AuraDarkBackground
 import com.example.ui.theme.MyApplicationTheme
 
 private const val DEVICE_CREDENTIAL_REQUEST = 1001
+
+internal fun incomingAudioUri(intent: Intent): Uri? {
+    if (intent.action != Intent.ACTION_VIEW && intent.action != Intent.ACTION_SEND) return null
+    val uri = try {
+        if (intent.action == Intent.ACTION_SEND) {
+            IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java)
+        } else intent.data
+    } catch (_: android.os.BadParcelableException) {
+        null
+    }
+    return uri?.takeIf { it.scheme == "content" || it.scheme == "file" }
+}
 
 class MainActivity : FragmentActivity() {
 
@@ -205,7 +218,7 @@ class MainActivity : FragmentActivity() {
             return
         }
         if (appLock.isUnlocked) {
-            deliverActivityResult(requestCode, resultCode, data)
+            super.onActivityResult(requestCode, resultCode, data)
         } else {
             appLock.deferActivityResult(requestCode, resultCode, data)
         }
@@ -306,11 +319,13 @@ class MainActivity : FragmentActivity() {
     private fun handleIncomingIntent(intent: Intent?, viewModel: AuraViewModel) {
         if (!appLock.isUnlocked || intent == null) return
         val action = intent.action
-        val data: Uri? = intent.data
+        val data = incomingAudioUri(intent)
 
-        if ((Intent.ACTION_VIEW == action || Intent.ACTION_SEND == action) && data != null) {
-            takePersistableReadPermission(data)
-            viewModel.importSongFromUri(data)
+        if (Intent.ACTION_VIEW == action || Intent.ACTION_SEND == action) {
+            if (data != null) {
+                takePersistableReadPermission(data)
+                viewModel.importSongFromUri(data)
+            }
             // No volver a importar ni reproducir el mismo archivo al desbloquear otra vez.
             setIntent(Intent(this, MainActivity::class.java))
         }

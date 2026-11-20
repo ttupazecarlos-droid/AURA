@@ -411,6 +411,7 @@ fun AuraApp(
                             currentSong = currentSong,
                             queue = queue,
                             currentIndex = currentIndex,
+                            isShuffle = isShuffle,
                             onBack = { viewModel.navigateBack() },
                             onSongClick = { song -> playerManager.playSong(song, queue) },
                             onRemoveFromQueue = { idx -> playerManager.removeFromQueue(idx) },

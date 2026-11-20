@@ -209,8 +209,8 @@ fun SongInfoDialog(
                 InfoRow("Álbum", song.album)
                 InfoRow("Formato", song.format)
                 InfoRow("Calidad", song.qualityBadge)
-                InfoRow("Tasa de muestreo", "${song.sampleRate} Hz")
-                InfoRow("Profundidad de bits", "${song.bitDepth} bit")
+                InfoRow("Tasa de muestreo", if (song.sampleRate > 0) "${song.sampleRate} Hz" else "Desconocida")
+                InfoRow("Profundidad de bits", if (song.bitDepth > 0) "${song.bitDepth} bit" else "Desconocida")
                 InfoRow("Duración", song.durationFormatted)
                 if (!song.filePath.isNullOrEmpty()) {
                     InfoRow("Ruta", song.filePath!!)

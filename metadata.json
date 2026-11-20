@@ -1,6 +1,6 @@
 {
   "name": "AURA",
-  "description": "Reproductor de música local con soporte para archivos sin pérdida (FLAC, WAV, ALAC), gestor de archivos integrado, listas personalizadas, ecualizador y letras sincronizadas.",
+  "description": "Reproductor de música local con carpetas autorizadas, listas personalizadas, favoritos y letras LRC. Los formatos compatibles y la salida de audio dependen del dispositivo.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": []
 }

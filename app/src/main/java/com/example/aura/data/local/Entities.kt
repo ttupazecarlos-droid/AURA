@@ -7,7 +7,10 @@ package com.example.aura.data.local
  * NAVEGACIÓN: Daos.kt -> AuraDatabase.kt -> AuraViewModel (lee y convierte a modelos de /model).
  */
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
+import androidx.room.ForeignKey
+import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.example.aura.model.Song
 
@@ -15,7 +18,10 @@ import com.example.aura.model.Song
  * SongEntity: tabla "songs". Contiene todos los metadatos de una pista persistida.
  * toDomain()/fromDomain() traducen entre Room y el modelo usado por la UI.
  */
-@Entity(tableName = "songs")
+@Entity(
+    tableName = "songs",
+    indices = [Index(value = ["dateAdded"]), Index(value = ["uriString"])]
+)
 data class SongEntity(
     @PrimaryKey val id: String,
     val title: String,
@@ -32,7 +38,9 @@ data class SongEntity(
     val isFavorite: Boolean,
     val lyrics: String,
     val coverColorHex: Long,
-    val dateAdded: Long
+    val dateAdded: Long,
+    @ColumnInfo(defaultValue = "0") val sourceModifiedAt: Long = 0,
+    @ColumnInfo(defaultValue = "0") val fileSizeBytes: Long = 0
 ) {
     // Convierte la fila de Room en el modelo de dominio Song.
     fun toDomain(): Song = Song(
@@ -51,7 +59,9 @@ data class SongEntity(
         isFavorite = isFavorite,
         lyrics = lyrics,
         coverColorHex = coverColorHex,
-        dateAdded = dateAdded
+        dateAdded = dateAdded,
+        sourceModifiedAt = sourceModifiedAt,
+        fileSizeBytes = fileSizeBytes
     )
 
     companion object {
@@ -72,7 +82,9 @@ data class SongEntity(
             isFavorite = song.isFavorite,
             lyrics = song.lyrics,
             coverColorHex = song.coverColorHex,
-            dateAdded = song.dateAdded
+            dateAdded = song.dateAdded,
+            sourceModifiedAt = song.sourceModifiedAt,
+            fileSizeBytes = song.fileSizeBytes
         )
     }
 }
@@ -95,7 +107,22 @@ data class PlaylistEntity(
  */
 @Entity(
     tableName = "playlist_songs",
-    primaryKeys = ["playlistId", "songId"]
+    primaryKeys = ["playlistId", "songId"],
+    foreignKeys = [
+        ForeignKey(
+            entity = PlaylistEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["playlistId"],
+            onDelete = ForeignKey.CASCADE
+        ),
+        ForeignKey(
+            entity = SongEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["songId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [Index(value = ["songId"])]
 )
 data class PlaylistSongEntity(
     val playlistId: String,

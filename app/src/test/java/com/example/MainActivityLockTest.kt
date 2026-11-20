@@ -15,6 +15,7 @@ import android.app.KeyguardManager
 import android.net.Uri
 import android.view.WindowManager
 import androidx.lifecycle.ViewModelProvider
+import androidx.activity.result.contract.ActivityResultContracts
 import com.example.aura.auth.AppLock
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -30,6 +31,38 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class MainActivityLockTest {
+
+    @Test
+    @Config(sdk = [28, 34])
+    fun `shared audio uses EXTRA_STREAM and rejects the wrong parcelable type`() {
+        val uri = Uri.parse("content://test/music.flac")
+        assertEquals(uri, incomingAudioUri(Intent(Intent.ACTION_SEND).putExtra(Intent.EXTRA_STREAM, uri)))
+        assertNull(incomingAudioUri(Intent(Intent.ACTION_SEND).putExtra(Intent.EXTRA_STREAM, Intent())))
+        assertNull(incomingAudioUri(Intent(Intent.ACTION_VIEW, Uri.parse("https://example.com/music.flac"))))
+    }
+
+    @Test
+    fun `picker results reach the registry only after successful authentication`() {
+        Robolectric.buildActivity(MainActivity::class.java).use { controller ->
+            val activity = controller.setup().get()
+            val lock = ViewModelProvider(activity)[AppLock::class.java]
+            var received: Uri? = null
+            val launcher = activity.activityResultRegistry.register(
+                "protected_folder", ActivityResultContracts.OpenDocumentTree()
+            ) { received = it }
+            launcher.launch(null)
+            val request = shadowOf(activity).nextStartedActivityForResult
+            val uri = Uri.parse("content://test/tree/music")
+            shadowOf(activity).receiveResult(request.intent, Activity.RESULT_OK, Intent().setData(uri))
+            assertNull(received)
+            lock.beginAuthentication()
+            lock.beginDeviceCredential()
+            shadowOf(activity).callOnActivityResult(1001, Activity.RESULT_OK, null)
+            assertEquals(uri, received)
+            assertTrue(lock.takeActivityResults().isEmpty())
+            launcher.unregister()
+        }
+    }
 
     // Sin PIN/patrón/contraseña configurados no se puede autenticar ni abrir la app.
     @Test

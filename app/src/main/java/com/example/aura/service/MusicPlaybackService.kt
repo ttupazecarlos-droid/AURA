@@ -21,6 +21,7 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.os.Build
 import android.os.IBinder
+import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import androidx.core.app.NotificationCompat
@@ -34,6 +35,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
 class MusicPlaybackService : Service() {
@@ -117,12 +120,16 @@ class MusicPlaybackService : Service() {
             setCallback(object : MediaSessionCompat.Callback() {
                 // Callback de la sesión: reanuda la reproducción.
                 override fun onPlay() {
-                    playerManager.togglePlayPause()
+                    playerManager.play()
                 }
 
                 // Callback de la sesión: pausa la reproducción.
                 override fun onPause() {
-                    playerManager.togglePlayPause()
+                    playerManager.pause()
+                }
+
+                override fun onSeekTo(pos: Long) {
+                    playerManager.seekTo(pos)
                 }
 
                 // Callback de la sesión: salta a la siguiente pista de la cola.
@@ -137,27 +144,44 @@ class MusicPlaybackService : Service() {
 
                 // Callback de la sesión: detiene la reproducción y cierra el servicio en primer plano.
                 override fun onStop() {
-                    if (playerManager.isPlaying.value) {
-                        playerManager.togglePlayPause()
-                    }
+                    playerManager.stop()
                     stopForegroundService()
                 }
             })
         }
     }
 
-    // Observa canción actual y estado play/pause para refrescar la notificación.
+    // El progreso solo actualiza la sesión; no vuelve a crear carátulas/notificaciones.
     private fun observePlayerState() {
         observerJob?.cancel()
         observerJob = serviceScope.launch {
             launch {
-                playerManager.currentSong.collectLatest { song ->
-                    updateNotification(song, playerManager.isPlaying.value)
+                combine(playerManager.currentSong, playerManager.isPlaying) { song, isPlaying ->
+                    song to isPlaying
+                }.distinctUntilChanged().collectLatest { (song, isPlaying) ->
+                    updateNotification(song, isPlaying)
                 }
             }
             launch {
-                playerManager.isPlaying.collectLatest { isPlaying ->
-                    updateNotification(playerManager.currentSong.value, isPlaying)
+                combine(playerManager.currentPositionMs, playerManager.isPlaying) { position, isPlaying ->
+                    position to isPlaying
+                }.collectLatest { (_, isPlaying) ->
+                    updatePlaybackState(isPlaying)
+                }
+            }
+            launch {
+                combine(playerManager.currentSong, playerManager.durationMs) { song, duration ->
+                    song to duration
+                }.collectLatest { (song, duration) ->
+                    mediaSession?.setMetadata(song?.let {
+                        MediaMetadataCompat.Builder()
+                            .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, it.id)
+                            .putString(MediaMetadataCompat.METADATA_KEY_TITLE, it.title)
+                            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, it.artist)
+                            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, it.album)
+                            .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, duration)
+                            .build()
+                    })
                 }
             }
         }
@@ -168,8 +192,6 @@ class MusicPlaybackService : Service() {
         if (song == null) {
             return
         }
-
-        updatePlaybackState(isPlaying)
 
         val notification = buildMediaNotification(song, isPlaying)
 
@@ -183,6 +205,7 @@ class MusicPlaybackService : Service() {
             } else {
                 startForeground(NOTIFICATION_ID, notification)
             }
+            playerManager.onPlaybackServiceReady()
         } catch (e: Exception) {
             // Fallback for notification posting
             val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -204,9 +227,10 @@ class MusicPlaybackService : Service() {
                         PlaybackStateCompat.ACTION_PAUSE or
                         PlaybackStateCompat.ACTION_SKIP_TO_NEXT or
                         PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS or
+                        PlaybackStateCompat.ACTION_SEEK_TO or
                         PlaybackStateCompat.ACTION_STOP
             )
-            .setState(state, playerManager.currentPositionMs.value, 1.0f)
+            .setState(state, playerManager.currentPositionMs.value, if (isPlaying) 1.0f else 0.0f)
             .build()
 
         mediaSession?.setPlaybackState(playbackState)
@@ -255,12 +279,6 @@ class MusicPlaybackService : Service() {
         }
         val playPauseTitle = if (isPlaying) "Pausar" else "Reproducir"
 
-        val qualityLabel = if (song.isLossless) {
-            "Sin Pérdida • ${song.format} ${song.bitDepth}b/${song.sampleRate / 1000}kHz"
-        } else {
-            "Audio Local • ${song.format}"
-        }
-
         val largeIconBitmap = createColoredCoverBitmap(song.coverColorHex)
 
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
@@ -268,7 +286,7 @@ class MusicPlaybackService : Service() {
             .setLargeIcon(largeIconBitmap)
             .setContentTitle(song.title)
             .setContentText(song.artist)
-            .setSubText(qualityLabel)
+            .setSubText(song.qualityBadge)
             .setContentIntent(contentPendingIntent)
             .setVisibility(
                 if (showOnLockscreen) NotificationCompat.VISIBILITY_PUBLIC
@@ -336,6 +354,8 @@ class MusicPlaybackService : Service() {
     // Quita la notificación del primer plano y detiene el servicio.
     private fun stopForegroundService() {
         observerJob?.cancel()
+        playerManager.onPlaybackServiceStopped()
+        updatePlaybackState(false)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             stopForeground(STOP_FOREGROUND_REMOVE)
         } else {
@@ -358,6 +378,7 @@ class MusicPlaybackService : Service() {
     override fun onDestroy() {
         observerJob?.cancel()
         serviceScope.cancel()
+        playerManager.onPlaybackServiceStopped()
         playerManager.stop()
         mediaSession?.isActive = false
         mediaSession?.release()

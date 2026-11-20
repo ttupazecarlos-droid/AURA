@@ -1,18 +1,6 @@
-<?xml version="1.0" encoding="utf-8"?><!--
-  ARCHIVO: backup_rules.xml
-  FUNCIÓN: Reglas de copia de seguridad para Android 11 o inferior (full-backup-content).
-           Actualmente no incluye ni excluye nada; se puede personalizar si se añaden datos.
--->
-<!--
-   Sample backup rules file; uncomment and customize as necessary.
-   See https://developer.android.com/guide/topics/data/autobackup
-   for details.
-   Note: This file is ignored for devices older than API 31
-   See https://developer.android.com/about/versions/12/backup-restore
--->
+<?xml version="1.0" encoding="utf-8"?>
+<!-- La biblioteca y sus autorizaciones son privadas y específicas de este dispositivo. -->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <exclude domain="database" path="." />
+    <exclude domain="sharedpref" path="." />
 </full-backup-content>

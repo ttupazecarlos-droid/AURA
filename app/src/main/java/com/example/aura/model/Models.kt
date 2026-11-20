@@ -21,15 +21,17 @@ data class Song(
     val durationMs: Long = 0L,
     val uriString: String = "",
     val filePath: String? = null,
-    val format: String = "FLAC", // FLAC, WAV, ALAC, MP3, AAC, OGG
-    val sampleRate: Int = 44100, // 44100, 48000, 96000, 192000
-    val bitDepth: Int = 16, // 16, 24, 32
-    val bitrateKbps: Int = 1411,
-    val isLossless: Boolean = true,
+    val format: String = "Desconocido",
+    val sampleRate: Int = 0,
+    val bitDepth: Int = 0,
+    val bitrateKbps: Int = 0,
+    val isLossless: Boolean = false,
     val isFavorite: Boolean = false,
     val lyrics: String = "",
     val coverColorHex: Long = 0xFF8A5CF6,
-    val dateAdded: Long = System.currentTimeMillis()
+    val dateAdded: Long = System.currentTimeMillis(),
+    val sourceModifiedAt: Long = 0,
+    val fileSizeBytes: Long = 0
 ) {
     // Duración lista para mostrar en formato m:ss.
     val durationFormatted: String
@@ -43,15 +45,18 @@ data class Song(
     // Etiqueta de calidad mostrada en el reproductor (Lossless / Hi-Res / bitrate).
     val qualityBadge: String
         get() {
-            return if (isLossless) {
-                if (sampleRate >= 88200 || bitDepth >= 24) {
-                    "HI-RES LOSSLESS • $format ${bitDepth}b/${sampleRate / 1000}kHz"
-                } else {
-                    "LOSSLESS • $format ${bitDepth}b/${sampleRate / 1000}kHz"
-                }
-            } else {
-                "$format • ${bitrateKbps} kbps"
+            if (!isLossless) {
+                return if (bitrateKbps > 0) "$format • $bitrateKbps kbps" else format
             }
+            val quality = if (sampleRate >= 88200 || bitDepth >= 24) "HI-RES LOSSLESS" else "LOSSLESS"
+            val specs = listOfNotNull(
+                bitDepth.takeIf { it > 0 }?.let { "${it}b" },
+                sampleRate.takeIf { it > 0 }?.let {
+                    if (it >= 1000) "${java.math.BigDecimal.valueOf(it.toLong(), 3).stripTrailingZeros().toPlainString()}kHz"
+                    else "${it}Hz"
+                }
+            ).joinToString("/")
+            return "$quality • $format" + if (specs.isEmpty()) "" else " $specs"
         }
 }
 

@@ -19,6 +19,7 @@ import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Build
 import android.util.Log
+import androidx.core.content.ContextCompat
 import com.example.aura.model.Song
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -62,9 +63,16 @@ class AudioPlayerManager private constructor(private val context: Context) {
     private val scope = CoroutineScope(Dispatchers.Main)
     private var mediaPlayer: MediaPlayer? = null
     private var progressJob: Job? = null
+    private var isPrepared = false
+    private var playWhenReady = false
+    private var isPlaybackServiceReady = false
 
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
     private var audioFocusRequest: AudioFocusRequest? = null
+    private var audioFocusChangeListener: AudioManager.OnAudioFocusChangeListener? = null
+    private var audioFocusGeneration = 0L
+    private var hasAudioFocus = false
+    private var waitingForAudioFocus = false
     private var isNoisyReceiverRegistered = false
 
     private val _currentSong = MutableStateFlow<Song?>(null)
@@ -98,13 +106,14 @@ class AudioPlayerManager private constructor(private val context: Context) {
     // Índices ya reproducidos en el ciclo actual de shuffle, para no repetir hasta agotar la cola.
     private val shuffledPlayedIndices = mutableSetOf<Int>()
 
-    private val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
+    private fun handleAudioFocusChange(focusChange: Int) {
         when (focusChange) {
             AudioManager.AUDIOFOCUS_LOSS -> {
-                pausePlayback()
-                abandonAudioFocus()
+                pause()
             }
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                hasAudioFocus = false
+                waitingForAudioFocus = playWhenReady
                 pausePlayback()
             }
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
@@ -116,6 +125,11 @@ class AudioPlayerManager private constructor(private val context: Context) {
                 try {
                     mediaPlayer?.setVolume(1.0f, 1.0f)
                 } catch (_: Exception) {}
+                if (playWhenReady && waitingForAudioFocus) {
+                    waitingForAudioFocus = false
+                    hasAudioFocus = true
+                    startPlaybackIfReady()
+                }
             }
         }
     }
@@ -123,7 +137,7 @@ class AudioPlayerManager private constructor(private val context: Context) {
     private val noisyReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context?, intent: Intent?) {
             if (intent?.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY) {
-                pausePlayback()
+                pause()
             }
         }
     }
@@ -160,7 +174,7 @@ class AudioPlayerManager private constructor(private val context: Context) {
 
     // Crea/reinicia MediaPlayer y registra los listeners de preparación, fin y error.
     private fun initMediaPlayer() {
-        releasePlayer()
+        releaseMediaPlayer()
         mediaPlayer = MediaPlayer().apply {
             setAudioAttributes(
                 AudioAttributes.Builder()
@@ -168,27 +182,22 @@ class AudioPlayerManager private constructor(private val context: Context) {
                     .setUsage(AudioAttributes.USAGE_MEDIA)
                     .build()
             )
-            setOnCompletionListener {
-                handleTrackCompletion()
+            setOnCompletionListener { mp ->
+                if (mp === mediaPlayer && playWhenReady) handleTrackCompletion()
             }
-            setOnErrorListener { _, what, extra ->
-                Log.e("AudioPlayerManager", "MediaPlayer error: what=$what extra=$extra")
-                pausePlayback()
+            setOnErrorListener { mp, what, extra ->
+                if (mp === mediaPlayer) {
+                    Log.e("AudioPlayerManager", "MediaPlayer error: what=$what extra=$extra")
+                    pause()
+                    releaseMediaPlayer()
+                }
                 true
             }
             setOnPreparedListener { mp ->
+                if (mp !== mediaPlayer || isPrepared) return@setOnPreparedListener
+                isPrepared = true
                 _durationMs.value = mp.duration.toLong().coerceAtLeast(0L)
-                if (requestAudioFocus()) {
-                    mp.start()
-                    _isPlaying.value = true
-                    startProgressTracker()
-                    registerNoisyReceiver()
-                    try {
-                        com.example.aura.service.MusicPlaybackService.startService(context)
-                    } catch (e: Exception) {
-                        Log.w("AudioPlayerManager", "Notification service start: ${e.message}")
-                    }
-                }
+                startPlaybackIfReady()
             }
         }
     }
@@ -213,79 +222,103 @@ class AudioPlayerManager private constructor(private val context: Context) {
 
     // Carga la URI de la pista en MediaPlayer y prepara la reproducción asíncrona.
     private fun playTrack(song: Song) {
+        pausePlayback()
         _currentSong.value = song
         _currentPositionMs.value = 0L
         _durationMs.value = song.durationMs
+        playWhenReady = true
+        registerNoisyReceiver()
 
         try {
-            if (mediaPlayer == null) {
-                initMediaPlayer()
-            } else {
-                mediaPlayer?.reset()
-            }
-
+            // Cada pista posee su player: un callback antiguo no puede preparar la pista nueva.
+            initMediaPlayer()
             val uri = Uri.parse(song.uriString)
             mediaPlayer?.setDataSource(context, uri)
+            startPlaybackService()
             mediaPlayer?.prepareAsync()
         } catch (e: Exception) {
             Log.e("AudioPlayerManager", "Failed to play ${song.title}", e)
-            _isPlaying.value = false
+            pause()
+            releaseMediaPlayer()
         }
     }
 
     // Alterna entre reproducir y pausar; si no hay pista activa, arranca la primera de la cola.
     fun togglePlayPause() {
-        if (_currentSong.value == null && _queue.value.isNotEmpty()) {
-            playTrack(_queue.value.first())
-            return
-        }
-        val mp = mediaPlayer ?: run {
-            initMediaPlayer()
-            _currentSong.value?.let { playTrack(it) }
-            return
-        }
+        if (playWhenReady) pause() else play()
+    }
 
-        try {
-            if (mp.isPlaying) {
-                pausePlayback()
-                abandonAudioFocus()
-            } else {
-                if (requestAudioFocus()) {
-                    mp.start()
-                    _isPlaying.value = true
-                    startProgressTracker()
-                    registerNoisyReceiver()
-                    try {
-                        com.example.aura.service.MusicPlaybackService.startService(context)
-                    } catch (_: Exception) {}
-                }
-            }
-        } catch (e: IllegalStateException) {
-            // Tras un error de decodificación el player queda en estado inválido y `isPlaying`/`start` lanzan.
-            Log.w("AudioPlayerManager", "Invalid player state, recreating", e)
-            initMediaPlayer()
-            _isPlaying.value = false
-            _currentSong.value?.let { playTrack(it) }
+    fun play() {
+        if (playWhenReady) return
+        val song = _currentSong.value ?: _queue.value.firstOrNull() ?: return
+        if (mediaPlayer == null || _currentSong.value == null) {
+            playTrack(song)
+            return
         }
+        playWhenReady = true
+        registerNoisyReceiver()
+        startPlaybackService()
+        startPlaybackIfReady()
+    }
+
+    fun pause() {
+        playWhenReady = false
+        pausePlayback()
+        unregisterNoisyReceiver()
+        abandonAudioFocus()
+    }
+
+    private fun startPlaybackIfReady() {
+        if (!playWhenReady || !isPrepared || _isPlaying.value) return
+        // Desde API35, pedir foco fuera de TOP exige un FGS ya activo, no solo solicitado.
+        if (Build.VERSION.SDK_INT >= 35 && !isPlaybackServiceReady) return
+        val mp = mediaPlayer ?: return
+        try {
+            if (!requestAudioFocus()) return
+            mp.start()
+            _isPlaying.value = true
+            startProgressTracker()
+        } catch (e: Exception) {
+            Log.w("AudioPlayerManager", "Failed to start playback", e)
+            pause()
+            releaseMediaPlayer()
+        }
+    }
+
+    private fun startPlaybackService() {
+        try {
+            com.example.aura.service.MusicPlaybackService.startService(context)
+        } catch (e: Exception) {
+            Log.w("AudioPlayerManager", "Notification service start: ${e.message}")
+        }
+    }
+
+    internal fun onPlaybackServiceReady() {
+        isPlaybackServiceReady = true
+        startPlaybackIfReady()
+    }
+
+    internal fun onPlaybackServiceStopped() {
+        isPlaybackServiceReady = false
     }
 
     // Pausa la reproducción sin liberar el reproductor (pérdida de foco, audio ruidoso, etc.).
     private fun pausePlayback() {
         try {
-            mediaPlayer?.let { mp ->
+            if (isPrepared) mediaPlayer?.let { mp ->
                 if (mp.isPlaying) {
                     mp.pause()
                 }
+                _currentPositionMs.value = mp.currentPosition.toLong().coerceAtLeast(0L)
             }
         } catch (_: Exception) {}
         _isPlaying.value = false
         stopProgressTracker()
-        unregisterNoisyReceiver()
     }
 
     fun stop() {
-        pausePlayback()
-        abandonAudioFocus()
+        pause()
+        if (!isPrepared) releaseMediaPlayer()
     }
 
     // Fin de cola: además de pausar, quita la notificación en primer plano.
@@ -301,9 +334,15 @@ class AudioPlayerManager private constructor(private val context: Context) {
     // Salta a una posición concreta de la pista (ms).
     fun seekTo(positionMs: Long) {
         val mp = mediaPlayer ?: return
+        if (!isPrepared) return
+        val position = positionMs.coerceIn(0L, _durationMs.value.coerceAtLeast(0L))
         try {
-            mp.seekTo(positionMs.toInt())
-            _currentPositionMs.value = positionMs
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                mp.seekTo(position, MediaPlayer.SEEK_PREVIOUS_SYNC)
+            } else {
+                mp.seekTo(position.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
+            }
+            _currentPositionMs.value = position
         } catch (e: Exception) {
             Log.e("AudioPlayerManager", "Seek error", e)
         }
@@ -315,6 +354,9 @@ class AudioPlayerManager private constructor(private val context: Context) {
         if (q.isEmpty()) return
 
         if (_isShuffle.value && q.size > 1) {
+            if (shuffledPlayedIndices.size >= q.size && _repeatMode.value != RepeatMode.OFF) {
+                shuffledPlayedIndices.clear()
+            }
             val nextIdx = pickShuffleIndex(
                 queueSize = q.size,
                 currentIndex = _currentIndex.value,
@@ -404,6 +446,12 @@ class AudioPlayerManager private constructor(private val context: Context) {
         }
     }
 
+    // Refresca URI/metadatos sin interrumpir el descriptor que ya está reproduciéndose.
+    fun updateQueuedSong(previousId: String, song: Song) {
+        _queue.value = _queue.value.map { if (it.id == previousId) song else it }
+        if (_currentSong.value?.id == previousId) _currentSong.value = song
+    }
+
     // Elimina una pista de la cola y ajusta el índice actual si es necesario.
     fun removeFromQueue(index: Int) {
         val curList = _queue.value.toMutableList()
@@ -441,7 +489,17 @@ class AudioPlayerManager private constructor(private val context: Context) {
     }
 
     private fun requestAudioFocus(): Boolean {
-        val am = audioManager ?: return true
+        if (hasAudioFocus) return true
+        if (waitingForAudioFocus) return false
+        val am = audioManager ?: run {
+            hasAudioFocus = true
+            return true
+        }
+        val generation = ++audioFocusGeneration
+        val listener = AudioManager.OnAudioFocusChangeListener { change ->
+            if (generation == audioFocusGeneration) handleAudioFocusChange(change)
+        }
+        audioFocusChangeListener = listener
         val result = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val audioAttributes = AudioAttributes.Builder()
                 .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
@@ -450,37 +508,49 @@ class AudioPlayerManager private constructor(private val context: Context) {
             val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
                 .setAudioAttributes(audioAttributes)
                 .setAcceptsDelayedFocusGain(true)
-                .setOnAudioFocusChangeListener(audioFocusChangeListener)
+                .setOnAudioFocusChangeListener(listener)
                 .build()
             audioFocusRequest = focusRequest
             am.requestAudioFocus(focusRequest)
         } else {
             @Suppress("DEPRECATION")
             am.requestAudioFocus(
-                audioFocusChangeListener,
+                listener,
                 AudioManager.STREAM_MUSIC,
                 AudioManager.AUDIOFOCUS_GAIN
             )
         }
-        return result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+        hasAudioFocus = result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+        waitingForAudioFocus = result == AudioManager.AUDIOFOCUS_REQUEST_DELAYED
+        if (!hasAudioFocus && !waitingForAudioFocus) pause()
+        return hasAudioFocus
     }
 
     private fun abandonAudioFocus() {
+        audioFocusGeneration++
+        hasAudioFocus = false
+        waitingForAudioFocus = false
+        val request = audioFocusRequest
+        val listener = audioFocusChangeListener
+        audioFocusRequest = null
+        audioFocusChangeListener = null
         val am = audioManager ?: return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            audioFocusRequest?.let { am.abandonAudioFocusRequest(it) }
+            request?.let { am.abandonAudioFocusRequest(it) }
         } else {
             @Suppress("DEPRECATION")
-            am.abandonAudioFocus(audioFocusChangeListener)
+            listener?.let { am.abandonAudioFocus(it) }
         }
     }
 
     private fun registerNoisyReceiver() {
         if (!isNoisyReceiverRegistered) {
             try {
-                context.registerReceiver(
+                ContextCompat.registerReceiver(
+                    context,
                     noisyReceiver,
-                    IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
+                    IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY),
+                    ContextCompat.RECEIVER_NOT_EXPORTED
                 )
                 isNoisyReceiverRegistered = true
             } catch (e: Exception) {
@@ -522,13 +592,18 @@ class AudioPlayerManager private constructor(private val context: Context) {
 
     // Libera MediaPlayer y todos los recursos asociados (llamado al cerrar la app/ViewModel).
     fun releasePlayer() {
-        stopProgressTracker()
-        unregisterNoisyReceiver()
-        abandonAudioFocus()
+        pause()
         cancelSleepTimer()
+        releaseMediaPlayer()
+    }
+
+    private fun releaseMediaPlayer() {
+        stopProgressTracker()
+        val player = mediaPlayer
+        mediaPlayer = null
+        isPrepared = false
         try {
-            mediaPlayer?.release()
-            mediaPlayer = null
+            player?.release()
         } catch (_: Exception) {}
     }
 

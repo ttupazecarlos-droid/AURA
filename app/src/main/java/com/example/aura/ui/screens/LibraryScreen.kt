@@ -69,6 +69,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.aura.model.Playlist
 import com.example.aura.model.Song
+import com.example.aura.ui.isAutomaticPlaylist
 import com.example.ui.theme.AuraAccentPink
 import com.example.ui.theme.AuraBadge
 import com.example.ui.theme.AuraCardBorder
@@ -96,6 +97,7 @@ fun LibraryScreen(
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
     var showPlusMenu by remember { mutableStateOf(false) }
+    val editablePlaylists = playlists.filterNot { isAutomaticPlaylist(it.id) }
 
     Column(
         modifier = Modifier
@@ -222,7 +224,7 @@ fun LibraryScreen(
                         items(songs, key = { it.id }) { song ->
                             SongListItem(
                                 song = song,
-                                playlists = playlists,
+                                playlists = editablePlaylists,
                                 onClick = { onSongClick(song) },
                                 onToggleFavorite = { onToggleFavorite(song.id) },
                                 onAddToPlaylist = { pId -> onAddSongToPlaylist(pId, song.id) }

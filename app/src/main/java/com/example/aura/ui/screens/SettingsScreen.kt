@@ -108,7 +108,7 @@ fun SettingsScreen(
         // Informativo: no hay un interruptor porque el modo sin pérdida no se puede desactivar.
         SettingItemRow(
             title = "Sonido",
-            subtitle = "Reproducción sin pérdida (FLAC/WAV hasta 24b/192kHz)",
+            subtitle = "Formatos sin pérdida según la compatibilidad del dispositivo",
             icon = Icons.Default.Settings
         )
 
@@ -154,7 +154,7 @@ fun SettingsScreen(
                             color = Color.White
                         )
                         Text(
-                            text = "• Formatos soportados: FLAC (hasta 24-bit/192kHz), WAV (PCM), ALAC, AIFF, MP3, AAC, OGG.\n• AURA solo lee las carpetas que autorizas. Las rutas se guardan y se conservan al actualizar la app.\n• Cada vez que abres una carpeta, AURA busca archivos nuevos y quita de la biblioteca los que ya no existen.\n• Listas de reproducción personalizadas y letras sincronizadas.",
+                            text = "• Formatos locales: FLAC, WAV, ALAC, AIFF, MP3, AAC y OGG, según los decodificadores del teléfono. MP3 y AAC son formatos con pérdidas.\n• Los datos de calidad describen el archivo, no garantizan la salida efectiva del dispositivo.\n• AURA solo lee las carpetas que autorizas. Las rutas se conservan al actualizar la app.\n• La biblioteca excluye audios de menos de 60 segundos, notas de voz y tonos.\n• Las letras .lrc se buscan junto al audio en carpetas autorizadas.",
                             style = MaterialTheme.typography.bodySmall,
                             color = AuraTextSecondary
                         )
